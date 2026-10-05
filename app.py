@@ -12,7 +12,9 @@ Features:
 
 import streamlit as st
 import pandas as pd
+import sqlite3
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import database as db
 import seed_data
 import recommendation as rec
@@ -26,6 +28,7 @@ st.set_page_config(
 )
 
 # Ensure database tables exist
+BUSINESS_TIMEZONE = ZoneInfo("Asia/Kolkata")
 db.init_db()
 
 # Custom Styling for polished UI
@@ -51,9 +54,10 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("### 📌 Milestone Status")
-    st.success("✔ **Phase 1: Foundation (40% Complete)**")
-    st.info("⏳ Phase 2: Operations & POS Logging")
-    st.info("⏳ Phase 3: Advanced ML Forecasting")
+    st.success("✔ **Phase 1: Foundation (40%)**")
+    st.success("✔ **Phase 2: Operations (30%)**")
+    st.info("⏳ **Cumulative progress: 75%**")
+    st.caption("Forecasting and advanced analytics remain in Phase 3.")
     st.markdown("---")
 
     st.markdown("### ⚙️ Database Utilities")
@@ -76,7 +80,7 @@ with st.sidebar:
 st.title("🥦 FreshTrack: Perishable Inventory & Wastage System")
 st.markdown(
     "A self-contained inventory management engine specialized for perishable agricultural commodities. "
-    "Features shelf-life batch tracking, FIFO expiry alerts, real-time stock balance, and spoilage-aware reorder recommendations."
+    "Phase 2 adds FIFO point-of-sale recording, spoilage write-offs, and purchase-cost-based loss accounting."
 )
 
 # If database has no vegetables yet, offer quick seeding
@@ -91,12 +95,14 @@ if not vegetables_list:
 # ==========================================
 # TABS NAVIGATION
 # ==========================================
-tab_overview, tab_procurement, tab_rec, tab_catalog, tab_roadmap = st.tabs([
+tab_overview, tab_procurement, tab_operations, tab_rec, tab_catalog, tab_report, tab_roadmap = st.tabs([
     "📊 Live Inventory & Expiry Monitor",
     "📦 Inward Stock (Procurement)",
+    "🧾 Sales & Write-offs",
     "💡 Reorder Recommendations",
     "🥗 Vegetable Master Catalog",
-    "🎯 Milestone Architecture & Logic"
+    "📈 Operations Report",
+    "🎯 Milestone Architecture & Logic",
 ])
 
 
@@ -116,11 +122,20 @@ with tab_overview:
         low_stock_count = len(df_overview[df_overview["status"] == "LOW STOCK"])
         expiring_soon_count = len(df_overview[df_overview["status"].isin(["EXPIRING SOON", "EXPIRED BATCH"])])
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("📦 Total Active Stock", f"{total_stock:.1f} kg")
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1.metric("📦 Total on Hand", f"{total_stock:.1f} kg")
         col2.metric("🏷️ Tracked Vegetables", f"{total_items}")
         col3.metric("⚠️ Low Stock Alerts", f"{low_stock_count}", delta_color="inverse")
-        col4.metric("⏰ Expiring Within 24-48h", f"{expiring_soon_count}", delta_color="inverse")
+        col4.metric("⏰ Expiring / Expired", f"{expiring_soon_count}", delta_color="inverse")
+        today = datetime.now(BUSINESS_TIMEZONE).date().strftime("%Y-%m-%d")
+        today_sales = sum(
+            row["revenue"] for row in db.get_all_sales() if row["sale_date"] == today
+        )
+        today_waste = sum(
+            row["loss_cost"] for row in db.get_all_wastage() if row["record_date"] == today
+        )
+        col5.metric("💰 Sales Today", f"₹{today_sales:,.2f}")
+        col6.metric("🗑️ Loss Today", f"₹{today_waste:,.2f}", delta_color="inverse")
         
         st.markdown("---")
         
@@ -140,7 +155,7 @@ with tab_overview:
             filtered_df = filtered_df[filtered_df["status"] == selected_status]
             
         display_cols = [
-            "name", "category", "current_stock_kg", "unit", 
+            "name", "category", "current_stock_kg", "available_for_sale_kg", "unit",
             "reorder_threshold_kg", "nearest_expiry", "days_to_expiry", "status"
         ]
         
@@ -148,6 +163,7 @@ with tab_overview:
             "name": "Vegetable Name",
             "category": "Category",
             "current_stock_kg": "Current Stock (kg)",
+            "available_for_sale_kg": "Available for Sale (kg)",
             "unit": "Unit",
             "reorder_threshold_kg": "Reorder Threshold (kg)",
             "nearest_expiry": "Nearest Batch Expiry",
@@ -178,21 +194,17 @@ with tab_overview:
         selected_veg_name = st.selectbox("Select Vegetable to View Batches", df_overview["name"].tolist())
         selected_veg_id = df_overview[df_overview["name"] == selected_veg_name]["id"].values[0]
         
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT batch_code, purchase_date, quantity_kg, cost_per_kg, expiry_date
-                FROM purchases
-                WHERE veg_id = ?
-                ORDER BY purchase_date DESC
-            """, (int(selected_veg_id),))
-            batches = [dict(r) for r in cursor.fetchall()]
+        batches = db.get_batch_balances(int(selected_veg_id))
             
         if batches:
-            df_batches = pd.DataFrame(batches).rename(columns={
+            df_batches = pd.DataFrame(batches)[[
+                "batch_code", "purchase_date", "purchased_kg", "remaining_kg",
+                "cost_per_kg", "expiry_date"
+            ]].rename(columns={
                 "batch_code": "Batch Code",
                 "purchase_date": "Purchase Date",
-                "quantity_kg": "Purchased Qty (kg)",
+                "purchased_kg": "Purchased Qty (kg)",
+                "remaining_kg": "Remaining Qty (kg)",
                 "cost_per_kg": "Cost / kg (₹)",
                 "expiry_date": "Batch Expiry Date"
             })
@@ -218,7 +230,7 @@ with tab_procurement:
             
             st.info(f"🌿 **{chosen_veg_name}** | Shelf Life: **{chosen_veg['shelf_life_days']} days** | Recommended Temp: **{chosen_veg['optimal_temp_celsius']}°C**")
             
-            p_date = st.date_input("Arrival / Purchase Date", datetime.now().date())
+            p_date = st.date_input("Arrival / Purchase Date", datetime.now(BUSINESS_TIMEZONE).date())
             qty = st.number_input("Quantity Received (kg)", min_value=0.5, max_value=5000.0, value=20.0, step=1.0)
             cost = st.number_input("Procurement Cost per kg (₹)", min_value=1.0, max_value=500.0, value=25.0, step=1.0)
             
@@ -262,7 +274,121 @@ with tab_procurement:
 
 
 # ==============================================================================
-# TAB 3: SMART REORDER RECOMMENDATIONS
+# TAB 3: POINT OF SALE AND WASTAGE WRITE-OFFS
+# ==============================================================================
+with tab_operations:
+    st.subheader("Daily Operations")
+    st.markdown(
+        "Log sales and spoilage as transactions. Sales and write-offs consume the oldest "
+        "available inward batches first; loss value is calculated from those batches' purchase costs."
+    )
+
+    current_inventory = db.get_stock_overview()
+    sale_options = {
+        row["name"]: row for row in current_inventory
+        if row["available_for_sale_kg"] > 0
+    }
+    waste_options = {
+        row["name"]: row for row in current_inventory
+        if row["current_stock_kg"] > 0
+    }
+    sale_col, waste_col = st.columns(2)
+
+    with sale_col:
+        st.markdown("### Record a Sale")
+        if not sale_options:
+            st.info("No stock is available to sell. Record an inward batch first.")
+        else:
+            with st.form("pos_sale_form", clear_on_submit=True):
+                sale_name = st.selectbox("Vegetable sold", list(sale_options.keys()))
+                sale_veg = sale_options[sale_name]
+                st.caption(
+                    f"Available to sell: {sale_veg['available_for_sale_kg']:.2f} "
+                    f"{sale_veg['unit']} · FIFO cost uses the oldest remaining batch."
+                )
+                sale_date = st.date_input("Sale date", datetime.now(BUSINESS_TIMEZONE).date(), key="sale_date")
+                sale_qty = st.number_input(
+                    f"Quantity sold ({sale_veg['unit']})",
+                    min_value=0.1, max_value=5000.0, value=1.0, step=0.5,
+                    key="sale_quantity"
+                )
+                sale_price = st.number_input(
+                    "Selling price per kg (₹)",
+                    min_value=0.01, max_value=100000.0, value=35.0, step=1.0,
+                    key="sale_price"
+                )
+                submit_sale = st.form_submit_button("Record sale")
+
+                if submit_sale:
+                    try:
+                        sale_id = db.record_sale(
+                            veg_id=int(sale_veg["id"]),
+                            sale_date=sale_date.strftime("%Y-%m-%d"),
+                            quantity_kg=sale_qty,
+                            selling_price_per_kg=sale_price
+                        )
+                        sale_record = next(
+                            row for row in db.get_all_sales() if row["id"] == sale_id
+                        )
+                        st.success(
+                            f"Sale #{sale_id} recorded · Revenue ₹{sale_record['revenue']:,.2f} · "
+                            f"FIFO cost ₹{sale_record['cost_of_goods_sold']:,.2f} · "
+                            f"Gross margin ₹{sale_record['gross_margin']:,.2f}"
+                        )
+                    except (ValueError, sqlite3.Error) as error:
+                        st.error(f"Sale not recorded: {error}")
+
+    with waste_col:
+        st.markdown("### Record Spoilage / Wastage")
+        if not waste_options:
+            st.info("No stock is available to write off.")
+        else:
+            with st.form("wastage_form", clear_on_submit=True):
+                waste_name = st.selectbox("Vegetable written off", list(waste_options.keys()))
+                waste_veg = waste_options[waste_name]
+                st.caption(
+                    f"Available to write off: {waste_veg['current_stock_kg']:.2f} "
+                    f"{waste_veg['unit']} · FIFO purchase cost will be used for the loss value."
+                )
+                waste_date = st.date_input("Write-off date", datetime.now(BUSINESS_TIMEZONE).date(), key="waste_date")
+                waste_qty = st.number_input(
+                    f"Quantity wasted ({waste_veg['unit']})",
+                    min_value=0.1, max_value=5000.0, value=1.0, step=0.5,
+                    key="waste_quantity"
+                )
+                waste_reason = st.selectbox("Reason", [
+                    "Rotting", "Overripe", "Transit damage", "Fungal spots",
+                    "Unsold", "Pest damage", "Other"
+                ])
+                waste_notes = st.text_input(
+                    "Notes (optional)",
+                    placeholder="Add a short detail for the audit ledger"
+                )
+                submit_waste = st.form_submit_button("Record write-off")
+
+                if submit_waste:
+                    try:
+                        wastage_id = db.record_wastage(
+                            veg_id=int(waste_veg["id"]),
+                            record_date=waste_date.strftime("%Y-%m-%d"),
+                            quantity_kg=waste_qty,
+                            reason=waste_reason,
+                            notes=waste_notes
+                        )
+                        waste_record = next(
+                            row for row in db.get_all_wastage()
+                            if row["id"] == wastage_id
+                        )
+                        st.success(
+                            f"Write-off #{wastage_id} recorded · "
+                            f"FIFO loss cost ₹{waste_record['loss_cost']:,.2f}"
+                        )
+                    except (ValueError, sqlite3.Error) as error:
+                        st.error(f"Write-off not recorded: {error}")
+
+
+# ==============================================================================
+# TAB 4: SMART REORDER RECOMMENDATIONS
 # ==============================================================================
 with tab_rec:
     st.subheader("💡 Spoilage-Aware Reorder Recommendations")
@@ -316,7 +442,7 @@ with tab_rec:
 
 
 # ==============================================================================
-# TAB 4: VEGETABLE MASTER CATALOG
+# TAB 5: VEGETABLE MASTER CATALOG
 # ==============================================================================
 with tab_catalog:
     st.subheader("Vegetable Master Catalog")
@@ -377,10 +503,78 @@ with tab_catalog:
 
 
 # ==============================================================================
-# TAB 5: MILESTONE ARCHITECTURE & LOGIC
+# TAB 6: OPERATIONS REPORT
+# ==============================================================================
+with tab_report:
+    st.subheader("Sales, Procurement & Spoilage Summary")
+    today = datetime.now(BUSINESS_TIMEZONE).date()
+    date_range = st.date_input(
+        "Reporting period",
+        value=(today - timedelta(days=29), today),
+        key="operations_report_range"
+    )
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        report_start, report_end = date_range
+        if report_start and report_end:
+            try:
+                report = db.get_operations_summary(
+                    report_start.strftime("%Y-%m-%d"),
+                    report_end.strftime("%Y-%m-%d")
+                )
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Sales revenue", f"₹{report['sales_revenue']:,.2f}")
+                m2.metric("FIFO-valued wastage", f"₹{report['wastage_cost']:,.2f}")
+                m3.metric("Procurement cost", f"₹{report['procurement_cost']:,.2f}")
+                m4.metric(
+                    "Outward quantity",
+                    f"{report['sold_kg'] + report['wasted_kg']:,.2f} kg",
+                    help=f"{report['sold_kg']:,.2f} kg sold · {report['wasted_kg']:,.2f} kg written off"
+                )
+
+                st.markdown("### Daily cash-flow and loss values")
+                df_daily = pd.DataFrame(report["daily"])
+                if not df_daily.empty:
+                    st.bar_chart(
+                        df_daily.set_index("date")[[
+                            "sales_revenue", "wastage_cost", "procurement_cost"
+                        ]],
+                        y_label="Amount (₹)"
+                    )
+
+                st.markdown("### Recent transaction ledger")
+                ledger_rows = db.get_recent_transactions(limit=100)
+                if ledger_rows:
+                    ledger = pd.DataFrame(ledger_rows).rename(columns={
+                        "type": "Type",
+                        "veg_name": "Vegetable",
+                        "transaction_date": "Date",
+                        "quantity_kg": "Quantity (kg)",
+                        "unit_price": "Unit price (₹)",
+                        "amount": "Amount (₹)",
+                        "reason": "Reason",
+                    })
+                    st.dataframe(
+                        ledger[[
+                            "Type", "Vegetable", "Date", "Quantity (kg)",
+                            "Unit price (₹)", "Amount (₹)", "Reason"
+                        ]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("No purchase, sale, or write-off transactions have been recorded.")
+            except ValueError as error:
+                st.error(f"Could not generate the report: {error}")
+    else:
+        st.caption("Choose a start date and an end date to generate the report.")
+
+
+# ==============================================================================
+# TAB 7: MILESTONE ARCHITECTURE & LOGIC
 # ==============================================================================
 with tab_roadmap:
-    st.subheader("🎯 Project Architecture & 40% Milestone Status")
+    st.subheader("🎯 Project Architecture & 75% Progress Status")
     
     st.markdown("""
     ### 1. Milestone Progress Breakdown
@@ -403,23 +597,24 @@ with tab_roadmap:
         """)
         
     with col_p2:
-        st.info("#### 🟡 Phase 2: Operations (Next 30%)")
+        st.success("#### 🟢 Phase 2: Operations (30% Complete)")
         st.markdown("""
-        - [ ] Daily POS Sales recording terminal
-        - [ ] Spoilage / Wastage write-off interface
-        - [ ] Wastage reason classification (rotting, damage, pest)
-        - [ ] Real-time financial loss valuation ledger
-        - [ ] FIFO batch depletion logic
+        - [x] Daily POS sales entry and stock validation
+        - [x] Spoilage / wastage write-off interface
+        - [x] Wastage reason and optional note capture
+        - [x] Purchase-cost-based loss valuation
+        - [x] FIFO batch depletion with auditable allocations
+        - [x] Operations totals and date-range report
         """)
         
     with col_p3:
-        st.info("#### 🔵 Phase 3: AI & Analytics (Final 30%)")
+        st.info("#### 🔵 Phase 3: Analytics & Forecasting (25% Remaining)")
         st.markdown("""
-        - [ ] Time-series demand forecasting (Exponential Smoothing / ARIMA)
-        - [ ] Dynamic Markdown Pricing engine for expiring stock
-        - [ ] Interactive spoilage trend dashboards & heatmaps
-        - [ ] Supplier quality rating based on wastage %
-        - [ ] Exportable audit reports (CSV/PDF)
+        - [x] Basic sales, procurement, and spoilage summaries (5% foundation)
+        - [ ] Demand forecasting after sufficient sales history is available
+        - [ ] Perishable decay penalties and suggested restock quantities
+        - [ ] Supplier quality analysis and advanced trend views
+        - [ ] Exportable audit reports
         """)
         
     st.markdown("---")
