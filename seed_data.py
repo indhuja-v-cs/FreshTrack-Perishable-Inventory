@@ -6,6 +6,7 @@ inward batches, and initial transaction logs for demo and testing.
 """
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import database as db
 
 
@@ -24,7 +25,7 @@ def seed_database(reset: bool = True):
         return
 
     print("Seeding vegetable master catalog...")
-    today = datetime.now().date()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
     vegetable_catalog = [
         {"name": "Spinach (Palak)", "category": "Leafy Greens", "unit": "kg", "shelf_life_days": 2, "reorder_threshold_kg": 10.0, "optimal_temp_celsius": 4.0},
@@ -100,9 +101,9 @@ def seed_database(reset: bool = True):
 
     print("Seeding recorded spoilage / wastage logs...")
     wastages = [
-        {"veg_name": "Spinach (Palak)", "days_ago": 0, "qty": 2.0, "reason": "Yellowing & wilted foliage", "cost": 40.0},
-        {"veg_name": "Tomato (Tamatar)", "days_ago": 0, "qty": 3.0, "reason": "Soft bruise and overripe transit damage", "cost": 96.0},
-        {"veg_name": "Cauliflower (Phool Gobi)", "days_ago": 0, "qty": 1.5, "reason": "Browning fungus spots", "cost": 42.0},
+        {"veg_name": "Spinach (Palak)", "days_ago": 0, "qty": 2.0, "reason": "Yellowing & wilted foliage"},
+        {"veg_name": "Tomato (Tamatar)", "days_ago": 0, "qty": 3.0, "reason": "Soft bruise and overripe transit damage"},
+        {"veg_name": "Cauliflower (Phool Gobi)", "days_ago": 0, "qty": 1.5, "reason": "Browning fungus spots"},
     ]
 
     for w in wastages:
@@ -111,8 +112,7 @@ def seed_database(reset: bool = True):
             veg_id=veg_ids[w["veg_name"]],
             record_date=w_date,
             quantity_kg=w["qty"],
-            reason=w["reason"],
-            loss_cost=w["cost"]
+            reason=w["reason"]
         )
 
     print("Seed completed successfully! All tables populated.")
