@@ -1,0 +1,134 @@
+FreshTrack — Perishable Vegetable Inventory & Wastage Reduction System
+
+Progress Report — Phase 2 Operations (75% Estimated Overall Completion)
+
+Submitted by: Indhuja V, B.E. Computer Science and Engineering, Rathinam Technical Campus (Autonomous), Coimbatore
+Repository: github.com/indhuja-v-cs/FreshTrack-Perishable-Inventory
+Report date: 5 October 2026
+
+1. Abstract
+
+FreshTrack is a local inventory management application for perishable agricultural products such as vegetables, leafy greens, roots and tubers. It records dated procurement batches, derives live stock from transactions, monitors shelf life, and raises stock and expiry warnings. Phase 2 completes the daily operations layer: staff can record sales and spoilage, the database validates available quantities, and both transactions consume purchase batches in first-in, first-out (FIFO) order. The original purchase cost of each consumed batch is used to calculate cost of goods sold, gross margin and spoilage loss. The application continues to run offline using Python, Streamlit and a local SQLite file.
+
+2. Problem Statement
+
+Small vegetable retailers often rely on memory when deciding how much produce to order and when to discard unsellable items. Without written sales and spoilage records, repeated losses are difficult to identify or value. A single stock total also cannot explain which supplier batch was sold or discarded, which makes purchase-cost accounting inaccurate when batch prices differ. FreshTrack addresses these gaps with a transaction ledger, batch-level depletion, quantity guards and date-range operations summaries.
+
+3. Objectives
+
+- Maintain a vegetable catalogue with shelf life, reorder threshold, unit and storage temperature.
+- Record dated inward purchases and calculate each batch's expiry date.
+- Derive live stock from purchase, sale and wastage records instead of storing an editable stock counter.
+- Prevent sales and write-offs from consuming more eligible stock than is available.
+- Allocate each sale and write-off to the oldest eligible purchase batches and retain those allocations.
+- Calculate sale revenue, FIFO cost of goods sold, gross margin and wastage loss in rupees.
+- Provide a unified transaction ledger and date-range summary of sales, procurement and wastage.
+- Preserve the local, self-contained SQLite workflow for small retailers who need offline access.
+
+4. System Architecture
+
+The submitted offline application has three layers:
+
+Presentation layer — app.py, a Streamlit interface for inventory, procurement, point-of-sale entry, wastage write-offs, catalogue management and operations reports.
+
+Logic and persistence layer — database.py, which owns schema initialization, SQLite transactions, quantity validation, FIFO planning, cost calculations, historical-data migration and stock health classification.
+
+Storage layer — perishable_inventory.db, a local SQLite database. It is created or upgraded when the application initializes and does not require a remote database service.
+
+seed_data.py generates date-relative demonstration transactions. Its reset option replaces the local database, so the database should be backed up before reseeding if it contains real records.
+
+5. Technology Stack
+
+Layer                         Technology                         Purpose
+Interface                     Streamlit                          Local, responsive Python user interface
+Database                      SQLite3                             Embedded relational and transaction storage
+Data handling                 Pandas                              Tabular display and daily report summaries
+Language                      Python 3.10+                        Application and inventory logic
+Date handling                 Python zoneinfo                     Asia/Kolkata business date and expiry calculations
+
+6. Database Design
+
+The database contains four core entity/ledger tables and two allocation tables. Foreign keys are enabled and child records cascade when their parent record is removed.
+
+vegetables — catalogue fields: id, name, category, unit, shelf_life_days, reorder_threshold_kg, optimal_temp_celsius and created_at.
+
+purchases — inward records: vegetable id, purchase date, quantity, purchase cost per kilogram, unique batch code and computed expiry date.
+
+sales — outward sales: vegetable id, date, quantity, selling price per kilogram and revenue.
+
+wastage — write-offs: vegetable id, date, quantity, reason, FIFO-valued loss_cost and optional notes.
+
+sale_batch_allocations — the sale id, purchase-batch id and quantity consumed from that batch. One sale can consume more than one batch.
+
+wastage_batch_allocations — the write-off id, purchase-batch id and quantity consumed from that batch. These rows preserve the source cost used to value each loss.
+
+Phase 1 databases are upgraded in place. On initialization, transactions that predate the allocation tables are assigned to purchase batches in transaction-date and FIFO order where eligible stock exists. The migration does not delete existing catalogue, purchase, sale or wastage records.
+
+7. Core Engine Design
+
+Stock balance. Stock is derived from the transaction history:
+
+Current Stock = Σ(Purchased Quantity) − Σ(Sold Quantity) − Σ(Wasted Quantity)
+
+Available-for-sale stock excludes quantities in expired batches. Expired quantity remains on hand until it is written off, so it is not silently removed from the physical-stock balance.
+
+FIFO allocation. Batches are ordered by purchase date and then by purchase record id. Sales consume the oldest non-expired batch first. A write-off consumes the oldest remaining batch first, including expired stock. If one batch does not cover the request, the allocation continues into the next eligible batch. The operation and its allocation rows are committed together in an SQLite write transaction.
+
+Sale accounting:
+
+Revenue = Quantity Sold × Selling Price per kg
+Cost of Goods Sold (COGS) = Σ(Allocated Batch Quantity × Original Batch Purchase Cost per kg)
+Gross Margin = Revenue − COGS
+
+Wastage accounting:
+
+Wastage Loss = Σ(Allocated Batch Quantity × Original Batch Purchase Cost per kg)
+
+The system does not accept a manual loss amount as the accounting source for a new write-off. It calculates loss from the purchase cost of the batches actually consumed.
+
+Expiry and dates. Expiry Date = Purchase Date + Catalogue Shelf Life. The application uses the Asia/Kolkata business date for expiry status, default transaction dates and daily summaries.
+
+Integrity guards. Sales require sufficient non-expired stock. Write-offs require sufficient remaining stock and may include expired batches. Non-positive or non-finite quantities/prices, unknown vegetables, blank write-off reasons and future transaction dates are rejected before persistence.
+
+8. Work Completed
+
+Component                                                        Status
+Phase 1 schema, catalogue, procurement and live-stock monitor     Complete
+Sales and wastage entry screens                                   Complete
+Reason classification and optional write-off notes                Complete
+Live-stock and eligible-stock quantity guards                     Complete
+FIFO sale and wastage allocation tables                           Complete
+FIFO cost of goods sold and gross-margin calculations             Complete
+FIFO-valued wastage loss accounting                                Complete
+Legacy transaction allocation migration                           Complete
+Unified purchase, sale and wastage ledger                          Complete
+Date-range daily summaries for sales, purchases and wastage        Complete
+Focused regression tests for FIFO, migration and stock limits      Implemented
+
+9. Overall Progress Estimate and Remaining Work
+
+The original report assigns 40% to Phase 1, 30% to Phase 2 and 30% to Phase 3. Completing Phase 1 and Phase 2 accounts for 70%. This report estimates overall completion at 75% by assigning a limited additional 5% to basic Phase 3 reporting groundwork: date-range aggregation and daily sales, procurement and wastage summaries. This is a transparent progress estimate, not a claim that a predictive model has been delivered.
+
+The remaining 25% covers the unimplemented Phase 3 work: time-series demand forecasting, forecast confidence checks, short-shelf-life decay penalties, dynamic markdown pricing, supplier-quality analysis and richer/exportable analytics. Forecast accuracy has not been measured because that model is not implemented.
+
+10. Verification
+
+The Phase 2 regression suite covers:
+
+- A sale that crosses two purchase batches and calculates FIFO cost and gross margin.
+- Wastage that consumes the remaining oldest batch and values the loss at its purchase cost.
+- Rejection of over-stock sales and write-offs without partial ledger changes.
+- Backfilling an unallocated Phase 1 sale into its FIFO purchase batch.
+- Blocking sale of expired produce while allowing it to be written off.
+
+All five regression tests passed under Python 3.13. `app.py`, `database.py` and `seed_data.py` also passed Python bytecode compilation. The tested SQLite operations use isolated temporary database files and leave the supplied demonstration database unchanged.
+
+11. Limitations Acknowledged
+
+The project does not yet forecast future demand and makes no forecasting-accuracy claim. A future forecast will rely on the retailer's own recorded sales and may not know about weather, festivals, price changes, local competition or unmet demand on days when stock ran out. The basic report summarizes recorded activity; it is not a predictive model. Stock valuation is based on recorded purchase costs and does not include labor, transport, rent or other overhead. The application is designed to support decisions, not replace retailer judgment.
+
+The submitted GitHub project remains the offline Streamlit application. A separate browser preview is available in the Replit workspace for visual review of the same Phase 2 workflows; it uses its own local SQLite database and does not synchronize records with the offline project.
+
+12. Conclusion
+
+Phase 2 completes FreshTrack's core operational loop. Procurement batches can be followed through sales and write-offs, and every outward quantity is attributed to its FIFO source batches. This makes remaining stock, sale cost, gross margin and spoilage loss traceable to recorded transactions. The quantity guards and atomic database writes protect the stock ledger from over-allocation, while the date-range summary provides a basic foundation for future analytics. The project is estimated at 75% complete; demand forecasting and the remaining advanced analytics work are still pending.
