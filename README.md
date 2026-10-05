@@ -4,17 +4,20 @@ A local, lightweight, and self-contained inventory management application specif
 
 ---
 
-## 📌 Project Milestone Status (40% Completed)
+## 📌 Project Milestone Status (75% Estimated Completion)
 
 This project is organized into three distinct development milestones:
 
 | Phase | Description | Completion Status |
 | :--- | :--- | :---: |
-| **Phase 1 (40%)** | **Core Architecture & Foundation**: Relational SQLite database, mathematical stock calculation engine, dynamic shelf-life batch tracking, master catalog CRUD, inward procurement recording, and live stock monitoring dashboard. | **✅ 100% Complete** |
-| **Phase 2 (30%)** | **Operations & Spoilage**: Daily POS sales recording terminal, spoilage/wastage write-off interface, loss cost accounting, and FIFO batch depletion. | ⏳ Planned |
-| **Phase 3 (30%)** | **AI Reorder & Analytics**: Machine learning demand forecasting, perishable decay penalties, smart restock recommendations, and interactive visual charts. | ⏳ Planned |
+| **Phase 1 (40%)** | **Core Architecture & Foundation**: Relational SQLite database, derived stock calculation, shelf-life batches, master catalogue, inward procurement and live stock monitoring. | **✅ Complete** |
+| **Phase 2 (30%)** | **Operations & Spoilage**: POS sales entry, validated spoilage write-offs, FIFO batch allocations, cost-of-goods-sold and wastage-loss accounting, date-range reports. | **✅ Complete** |
+| **Phase 3 foundation (5%)** | **Basic Analytics Preparation**: Daily and period summaries for sales, purchases and wastage. This is reporting groundwork, not predictive analytics. | **✅ Complete** |
+| **Phase 3 remaining (25%)** | **AI Reorder & Advanced Analytics**: Demand forecasting, perishable decay penalties, supplier-quality analysis and exportable reports. | **⏳ Remaining** |
 
 ---
+
+The 75% figure is an estimate based on the original 40% / 30% / 30% phase weights: Phase 1 (40%) + Phase 2 (30%) + a clearly limited 5% of Phase 3 reporting groundwork. Forecasting is not represented as complete.
 
 ## 🛠️ Technology Stack
 
@@ -31,6 +34,8 @@ This project is organized into three distinct development milestones:
 ├── database.py              # SQLite engine, schema definition, CRUD & stock logic
 ├── seed_data.py             # Realistic perishable vegetable sample data seeder
 ├── app.py                   # Main Streamlit web application
+├── tests/test_phase2.py     # FIFO, loss-cost and stock-guard tests
+├── PHASE_2_REPORT.txt       # Submission-ready Phase 2 report
 ├── requirements.txt         # Project dependencies
 ├── perishable_inventory.db  # Local SQLite database file (auto-generated)
 └── README.md                # Project documentation and run guide
@@ -52,11 +57,13 @@ py -3.14 -m pip install -r requirements.txt
 *(Or simply `pip install -r requirements.txt` if using your default Python environment)*
 
 ### 3. Populate Sample Data (Optional)
-To pre-load realistic perishable items (Spinach, Tomatoes, Potatoes, Onions, etc.) with inward batches and transactions:
+To replace the database with fresh, date-relative demonstration data (Spinach, Tomatoes, Potatoes, Onions, etc.):
 
 ```bash
 py -3.14 seed_data.py
 ```
+
+**Warning:** the seeder resets the local database. Back up `perishable_inventory.db` first if it contains real transactions.
 
 ### 4. Run the Streamlit Application
 Launch the local web server:
@@ -67,11 +74,18 @@ py -3.14 -m streamlit run app.py
 
 Streamlit will launch in your default web browser at `http://localhost:8501`.
 
+### 5. Run the Phase 2 checks
+From the project directory:
+
+```bash
+py -3.14 -m unittest discover -s tests -v
+```
+
 ---
 
 ## 🗄️ Database Design
 
-The system uses an embedded SQLite database (`perishable_inventory.db`) with 4 relational tables:
+The system uses an embedded SQLite database (`perishable_inventory.db`) with four core ledger tables and two FIFO allocation tables:
 
 1. **`vegetables`**:
    - `id`: Primary key
@@ -104,7 +118,13 @@ The system uses an embedded SQLite database (`perishable_inventory.db`) with 4 r
    - `record_date`: Disposal date
    - `quantity_kg`: Discarded spoilage quantity
    - `reason`: Classification (rotting, transit damage, fungal spots)
-   - `loss_cost`: Financial loss valuation
+   - `loss_cost`: Financial loss at the purchase cost of the consumed batches
+   - `notes`: Optional audit detail
+
+5. **`sale_batch_allocations`**: Links each sale to the purchase batches it consumed and records kilograms allocated from each batch.
+6. **`wastage_batch_allocations`**: Links each write-off to the purchase batches consumed, allowing accurate FIFO loss valuation.
+
+Phase 1 databases are upgraded when `init_db()` runs. Historical sale and wastage records are backfilled against eligible purchase batches in date order; existing stock is preserved.
 
 ---
 
@@ -118,13 +138,36 @@ $$\text{Current Stock} = \sum(\text{Purchased}) - \sum(\text{Sold}) - \sum(\text
 $$\text{Expiry Date} = \text{Purchase Date} + \text{Shelf Life (Days)}$$
 - **Days Remaining**:
 $$\text{Days Remaining} = \text{Expiry Date} - \text{Current Date}$$
+- **FIFO allocation**: a sale or write-off is assigned to the oldest eligible purchase batch first. Each allocation records its quantity and source purchase cost.
+- **Sale cost and margin**:
+$$\text{COGS} = \sum(\text{Allocated Quantity} \times \text{Batch Purchase Cost/kg})$$
+$$\text{Gross Margin} = \text{Sales Revenue} - \text{COGS}$$
+- **Wastage loss**:
+$$\text{Wastage Loss} = \sum(\text{Written-off Quantity from Batch} \times \text{Batch Purchase Cost/kg})$$
 
 ---
 
 ## 🎮 Realistic Demo Walkthrough
 
 1. **Open the Application**: Open `http://localhost:8501`.
-2. **Review Live Inventory**: Notice high-perishable spinach flagged as **EXPIRING SOON** (1 day left) and cauliflower as **LOW STOCK**.
-3. **Inspect Batches**: Use the dropdown at the bottom of the overview tab to inspect individual purchase batches and codes.
-4. **Log Inward Stock**: Switch to the **Inward Stock** tab, choose *Tomato (Tamatar)*, enter 30 kg, and click **Inward Stock**. Observe the auto-calculated expiry date and instant update to live inventory.
-5. **Add New Commodity**: Navigate to **Vegetable Master Catalog**, register *Bitter Gourd (Karela)* with 5 days shelf life, and observe it appear in the catalog table.
+2. **Review Live Inventory**: Review stock, low-stock and expiry warnings, today's sales revenue, and today's loss value.
+3. **Inspect Batches**: Select a vegetable in the inventory view to compare each batch's received quantity with its remaining FIFO balance.
+4. **Log Inward Stock**: Open **Inward Stock**, select a vegetable, enter its delivery quantity and purchase cost, then observe its computed expiry date.
+5. **Record a Sale**: In **Sales & Write-offs**, select **Record a Sale**, enter quantity and selling price, and review revenue, FIFO cost, and gross margin.
+6. **Record Spoilage**: Select a write-off reason and quantity. The stored loss is computed from the purchase cost of the FIFO batches consumed.
+7. **Review the Ledger and Period Summary**: Use **Operations Report** to select a date range and compare sales revenue, procurement cost, wasted quantity and wastage cost.
+8. **Add New Commodity**: In **Vegetable Master Catalog**, register a commodity with its shelf life, reorder threshold and recommended storage temperature.
+
+---
+
+## ✅ Phase 2 Operations and Data Integrity
+
+- Sales and write-offs are persisted as transactions; live stock remains derived from purchases minus sales and wastage.
+- Both operations run inside SQLite write transactions and reject quantities beyond the remaining eligible stock.
+- Sales exclude expired stock. Write-offs may consume expired stock so it can be cleared from the ledger.
+- Each sale and write-off stores batch allocations in separate relational tables. Allocation records make partial batch depletion auditable and ensure the cost follows the source lot.
+- Purchase cost flows into sale cost of goods sold and gross margin. Write-off loss is calculated from allocated batch cost, not a manually entered estimate.
+- The date-range report and unified ledger summarize sale revenue, purchase spend, lost quantity and FIFO-valued wastage.
+- The database engine uses the `Asia/Kolkata` business date for expiry and daily summaries.
+
+The Replit browser preview is a separate companion implementation for reviewing the same Phase 2 workflows. It uses its own local SQLite database and does **not** synchronize records with the offline Streamlit database.
